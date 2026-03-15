@@ -2,11 +2,9 @@
  * Aura — P2P Transfer Engine
  * Handles peer-to-peer file and message transfer using WebRTC Data Channels.
  * 
- * ZERO-CLOUD: Files transfer directly between devices in RAM.
- * No data is ever uploaded to a cloud server.
- * 
- * ICE Configuration: Uses ONLY local network candidates.
- * External STUN/TURN servers are deliberately excluded.
+ * Production-ready: Uses Google STUN servers for NAT traversal,
+ * bufferedAmountLow-based flow control for high-speed transfers,
+ * and Screen Wake Lock API for mobile reliability.
  */
 
 class Peer {
@@ -31,8 +29,12 @@ class Peer {
     }
 
     _dequeueFile() {
-        if (!this._filesQueue.length) return;
+        if (!this._filesQueue.length) {
+            this._releaseWakeLock();
+            return;
+        }
         this._busy = true;
+        this._acquireWakeLock();
         const file = this._filesQueue.shift();
         this._sendFile(file);
     }
@@ -41,7 +43,7 @@ class Peer {
         this.sendJSON({
             type: 'header',
             name: file.name,
-            mime: file.type,
+            mime: file.type || 'application/octet-stream',
             size: file.size
         });
         this._chunker = new FileChunker(file,
@@ -97,6 +99,7 @@ class Peer {
 
     _onFileHeader(header) {
         this._lastProgress = 0;
+        this._acquireWakeLock();
         this._digester = new FileDigester({
             name: header.name,
             mime: header.mime,
@@ -120,8 +123,10 @@ class Peer {
     }
 
     _onFileReceived(proxyFile) {
+        // Notification fires HERE — only after the Blob is fully assembled
         Events.fire('file-received', proxyFile);
         this.sendJSON({ type: 'transfer-complete' });
+        this._releaseWakeLock();
     }
 
     _onTransferCompleted() {
@@ -129,6 +134,7 @@ class Peer {
         this._reader = null;
         this._busy = false;
         this._dequeueFile();
+        // Only notify AFTER the receiver has confirmed assembly
         Events.fire('notify-user', 'File transfer completed.');
     }
 
@@ -140,6 +146,31 @@ class Peer {
     _onTextReceived(message) {
         const escaped = decodeURIComponent(escape(atob(message.text)));
         Events.fire('text-received', { text: escaped, sender: this._peerId });
+    }
+
+    // ─── Screen Wake Lock (prevents mobile CPU throttling) ───
+
+    async _acquireWakeLock() {
+        if (this._wakeLock) return;
+        try {
+            if ('wakeLock' in navigator) {
+                this._wakeLock = await navigator.wakeLock.request('screen');
+                this._wakeLock.addEventListener('release', () => {
+                    this._wakeLock = null;
+                });
+                console.log('Aura: Wake Lock acquired');
+            }
+        } catch (e) {
+            console.warn('Aura: Wake Lock not available:', e.message);
+        }
+    }
+
+    _releaseWakeLock() {
+        if (this._wakeLock) {
+            this._wakeLock.release();
+            this._wakeLock = null;
+            console.log('Aura: Wake Lock released');
+        }
     }
 }
 
@@ -173,6 +204,8 @@ class RTCPeer extends Peer {
         const channel = this._conn.createDataChannel('aura-data-channel', {
             ordered: true
         });
+        channel.binaryType = 'arraybuffer';
+        channel.bufferedAmountLowThreshold = 256 * 1024; // 256 KB
         channel.onopen = e => this._onChannelOpened(e);
         this._conn.createOffer().then(d => this._onDescription(d)).catch(e => this._onError(e));
     }
@@ -209,6 +242,7 @@ class RTCPeer extends Peer {
         console.log('Aura P2P: channel opened with', this._peerId);
         const channel = event.channel || event.target;
         channel.binaryType = 'arraybuffer';
+        channel.bufferedAmountLowThreshold = 256 * 1024; // 256 KB
         channel.onmessage = e => this._onMessage(e.data);
         channel.onclose = e => this._onChannelClosed();
         this._channel = channel;
@@ -237,7 +271,8 @@ class RTCPeer extends Peer {
     _onIceConnectionStateChange() {
         switch (this._conn.iceConnectionState) {
             case 'failed':
-                console.error('Aura: ICE Gathering failed');
+                console.error('Aura: ICE Gathering failed — restarting');
+                this._conn.restartIce();
                 break;
             default:
                 console.log('Aura ICE:', this._conn.iceConnectionState);
@@ -250,6 +285,18 @@ class RTCPeer extends Peer {
 
     _send(message) {
         if (!this._channel) return this.refresh();
+
+        // ─── bufferedAmountLow-based flow control ───
+        // If the send buffer is congested, wait for it to drain
+        // before sending more data. This is the KEY fix for
+        // slow > 10MB transfers and mobile upload failures.
+        if (this._channel.bufferedAmount > 1024 * 1024) { // > 1 MB buffered
+            this._channel.onbufferedamountlow = () => {
+                this._channel.onbufferedamountlow = null;
+                this._channel.send(message);
+            };
+            return;
+        }
         this._channel.send(message);
     }
 
@@ -334,13 +381,19 @@ class WSPeer extends Peer {
 }
 
 /**
- * ZERO-CLOUD ICE Configuration
- * NO external STUN/TURN servers. Only local network candidates are used.
- * This ensures all WebRTC connections stay within the local network.
+ * ICE Configuration — Production-ready
+ * Uses Google's public STUN servers for NAT traversal.
+ * This enables connections across networks (Phone ↔ Laptop)
+ * when devices are behind NAT/firewalls.
  */
 RTCPeer.config = {
     'sdpSemantics': 'unified-plan',
-    'iceServers': []
+    'iceServers': [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun3.l.google.com:19302' }
+    ]
 };
 
 window.Peer = Peer;

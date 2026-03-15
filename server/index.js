@@ -14,32 +14,72 @@ process.on('SIGTERM', () => {
 
 const parser = require('ua-parser-js');
 const { uniqueNamesGenerator, animals, colors } = require('unique-names-generator');
+const http = require('http');
 
 /**
- * Aura — Local Signaling Server
+ * Aura — Production Signaling Server
  * 
- * This server handles ONLY WebRTC signaling on the local network.
+ * This server handles ONLY WebRTC signaling.
  * NO file data passes through this server — all transfers are direct P2P.
- * NO data is sent to the internet.
+ * 
+ * CORS is configured to allow requests from GitHub Pages.
  */
+
+// ─── CORS-enabled HTTP server ───
+const ALLOWED_ORIGINS = [
+    'https://chandansaipavanpadala.github.io',
+    'http://localhost:3000',
+    'http://localhost:8000',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:8000'
+];
+
+const httpServer = http.createServer((req, res) => {
+    const origin = req.headers.origin;
+    if (ALLOWED_ORIGINS.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+    }
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+
+    if (req.method === 'OPTIONS') {
+        res.writeHead(204);
+        res.end();
+        return;
+    }
+
+    // Health check endpoint
+    if (req.url === '/' || req.url === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', service: 'aura-signaling' }));
+        return;
+    }
+
+    res.writeHead(404);
+    res.end();
+});
+
 class AuraServer {
 
     constructor(port) {
         const WebSocket = require('ws');
-        this._wss = new WebSocket.Server({ port: port });
+        this._wss = new WebSocket.Server({ server: httpServer });
         this._wss.on('connection', (socket, request) => this._onConnection(new Peer(socket, request)));
         this._wss.on('headers', (headers, response) => this._onHeaders(headers, response));
 
         this._rooms = {};
 
-        console.log(`
+        httpServer.listen(port, () => {
+            console.log(`
 ╔══════════════════════════════════════╗
 ║           AURA SERVER                ║
-║   Local P2P Signaling Active         ║
+║   Production Signaling Active        ║
 ║   Port: ${String(port).padEnd(28)}║
-║   Zero Cloud • Pure Privacy          ║
+║   CORS: GitHub Pages Enabled         ║
 ╚══════════════════════════════════════╝
-        `);
+            `);
+        });
     }
 
     _onConnection(peer) {
@@ -61,7 +101,7 @@ class AuraServer {
     _onHeaders(headers, response) {
         if (response.headers.cookie && response.headers.cookie.indexOf('peerid=') > -1) return;
         response.peerId = Peer.uuid();
-        headers.push('Set-Cookie: peerid=' + response.peerId + "; SameSite=Strict; Secure");
+        headers.push('Set-Cookie: peerid=' + response.peerId + "; SameSite=None; Secure; Path=/");
     }
 
     _onMessage(sender, message) {
@@ -139,7 +179,8 @@ class AuraServer {
 
     _send(peer, message) {
         if (!peer) return;
-        if (this._wss.readyState !== this._wss.OPEN) return;
+        // Fix: check the PEER SOCKET readyState, not the server's
+        if (peer.socket.readyState !== 1) return; // 1 = WebSocket.OPEN
         message = JSON.stringify(message);
         peer.socket.send(message, error => '');
     }
@@ -192,8 +233,10 @@ class Peer {
     _setPeerId(request) {
         if (request.peerId) {
             this.id = request.peerId;
-        } else {
+        } else if (request.headers.cookie && request.headers.cookie.indexOf('peerid=') > -1) {
             this.id = request.headers.cookie.replace('peerid=', '');
+        } else {
+            this.id = Peer.uuid();
         }
     }
 

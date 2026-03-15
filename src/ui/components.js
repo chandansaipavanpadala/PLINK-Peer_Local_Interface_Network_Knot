@@ -89,7 +89,7 @@ class PeerUI {
         // SVG progress ring:  radius=32, circumference = 2 * π * 32 ≈ 201
         return `
             <label class="column center" title="Click to send files or right click to send a message">
-                <input type="file" multiple>
+                <input type="file" multiple accept="*/*">
                 <div class="icon-container">
                     <x-icon>
                         <svg class="icon"><use xlink:href="#"/></svg>
