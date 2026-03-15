@@ -7,31 +7,31 @@
 
 ---
 
-## 🌌 Overview
+## Overview
 
 **Aura** is a premium, offline-first peer-to-peer file transfer utility. It bypasses cloud servers completely, instead utilizing WebRTC Data Channels and local signaling to transfer files directly between devices on your local network. 
 
 Designed with an **"Engineering Futurist"** philosophy, Aura combines the utilitarian precision of an IDE with the sleek aesthetics of a modern automotive dashboard. The result is a highly polished, glassmorphic interface that looks and feels like a specialized engineering tool.
 
-## ⚡ Features
+## Features
 
-### 🎨 "Midnight Engineering" Interface
-- **Glassmorphic Node Cards**: Beautiful frosted-glass UI elements representing network peers.
+### "Midnight Engineering" Interface
+- **Glassmorphic Node Cards**: Frosted-glass UI elements representing network peers.
 - **Circuit Board Animation**: A subtle, non-distracting CSS/Canvas background featuring glowing data-flow traces mapping out connections.
 - **Radial Progress Rings**: Minimalist SVG rings tracking file transfer progress in real-time, accompanied by streaming data-packet effects.
-- **Fluid Reponsiveness**: Flexbox and CSS Grid layouts adapting seamlessly from 5" phones to 27" monitors. 
+- **Fluid Reponsiveness**: Flexbox and CSS Grid layouts adapting seamlessly from smaller mobile screens to large desktop monitors.
 
-### 🔒 Pure Privacy & Local Transfers
+### Pure Privacy & Local Transfers
 - **True P2P**: Files stream from RAM to RAM via WebRTC. Data never leaves your network.
 - **Zero Cloud Architecture**: Operates without external STUN/TURN servers.
-- **"LOCAL MODE ACTIVE"**: Top-bar hardware-style badge confirming offline operation and total local network confinement.
+- **LOCAL MODE ACTIVE**: Top-bar hardware-style badge confirming offline operation and total local network confinement.
 - **Offline PWA**: Fully functional offline web application, powered by a robust Service Worker.
 
-### 📡 Hybrid Peer Discovery
+### Hybrid Peer Discovery
 - **Local Network Auto-Discovery**: Instantly identify other Aura instances running on the same network.
 - **Bluetooth Proximity**: Seamlessly discover and fall back to nearby devices using the Web Bluetooth API.
 
-## 🏗 System Architecture
+## System Architecture
 
 ```text
 .
@@ -58,7 +58,7 @@ Designed with an **"Engineering Futurist"** philosophy, Aura combines the utilit
 └── sounds/                      # Feedback audio
 ```
 
-## 🚀 Quick Start
+## Quick Start
 
 ### 1. Launch the Local Hub (Signaling Server)
 
@@ -88,3 +88,5 @@ npx serve .
 3. Devices will automatically discover each other and populate the workspace as detailed Node Cards.
 4. Click or tap a Node Card to transfer files, or right-click / long-press to send secure text messages.
 
+---
+*Built by [Chandan Sai Pavan Padala](https://github.com/chandansaipavanpadala/PLINK-Peer_Local_Interface_Network_Knot)*
