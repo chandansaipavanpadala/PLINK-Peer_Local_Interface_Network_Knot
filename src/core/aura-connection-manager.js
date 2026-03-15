@@ -66,11 +66,9 @@ class AuraConnectionManager {
     }
 
     _endpoint() {
-        // Local-only signaling — connects to the Aura server on the same host
-        const protocol = location.protocol.startsWith('https') ? 'wss' : 'ws';
+        // Production signaling server
         const webrtc = window.isRtcSupported ? '/webrtc' : '/fallback';
-        const url = protocol + '://' + location.host + location.pathname + 'server' + webrtc;
-        return url;
+        return 'wss://aura-lmxp.onrender.com' + webrtc;
     }
 
     _disconnect() {
