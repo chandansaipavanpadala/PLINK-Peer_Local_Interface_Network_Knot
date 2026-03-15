@@ -1,0 +1,17 @@
+{
+  "name": "aura-server",
+  "version": "1.0.0",
+  "description": "Aura — Local P2P signaling server for peer discovery and WebRTC connection establishment",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js"
+  },
+  "author": "Chandan Sai Pavan Padala",
+  "license": "MIT",
+  "dependencies": {
+    "ua-parser-js": "^0.7.24",
+    "unique-names-generator": "^4.3.0",
+    "ws": "^7.4.6"
+  }
+}

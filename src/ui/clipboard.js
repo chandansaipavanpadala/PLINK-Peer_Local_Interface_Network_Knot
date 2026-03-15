@@ -1,0 +1,37 @@
+/**
+ * Aura — Clipboard Polyfill
+ * Provides clipboard.writeText fallback for older browsers.
+ */
+if (!navigator.clipboard) {
+    navigator.clipboard = {
+        writeText: text => {
+            const span = document.createElement('span');
+            span.textContent = text;
+            span.style.whiteSpace = 'pre';
+            span.style.position = 'absolute';
+            span.style.left = '-9999px';
+            span.style.top = '-9999px';
+
+            const win = window;
+            const selection = win.getSelection();
+            win.document.body.appendChild(span);
+
+            const range = win.document.createRange();
+            selection.removeAllRanges();
+            range.selectNode(span);
+            selection.addRange(range);
+
+            let success = false;
+            try {
+                success = win.document.execCommand('copy');
+            } catch (err) {
+                return Promise.reject(err);
+            }
+
+            selection.removeAllRanges();
+            span.remove();
+
+            return success ? Promise.resolve() : Promise.reject(new Error('Copy failed'));
+        }
+    };
+}

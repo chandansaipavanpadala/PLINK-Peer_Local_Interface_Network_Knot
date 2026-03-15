@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "ua-parser-js": "^2.0.9",
+    "unique-names-generator": "^4.7.1"
+  }
+}
