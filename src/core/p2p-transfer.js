@@ -40,6 +40,13 @@ class Peer {
         }
         this._busy = true;
         this._acquireWakeLock();
+        
+        // 1-second "Ping" Heartbeat to prevent iOS WebSocket Sleep
+        clearInterval(this._transferPing);
+        this._transferPing = setInterval(() => {
+            if (this._server) this._server.send({ type: 'ping' });
+        }, 1000);
+
         const file = this._filesQueue.shift();
         this._sendFile(file);
     }
@@ -105,6 +112,12 @@ class Peer {
     _onFileHeader(header) {
         this._lastProgress = 0;
         this._acquireWakeLock();
+
+        clearInterval(this._transferPing);
+        this._transferPing = setInterval(() => {
+            if (this._server) this._server.send({ type: 'ping' });
+        }, 1000);
+
         this._digester = new FileDigester({
             name: header.name,
             mime: header.mime,
@@ -116,11 +129,12 @@ class Peer {
         if (!chunk.byteLength) return;
         this._digester.unchunk(chunk);
         const progress = this._digester.progress;
-        this._onDownloadProgress(progress);
 
-        // Throttle progress messages to reduce signaling overhead
-        if (progress - this._lastProgress < 0.005 && progress < 1) return;
+        // Force UI updates / UI renders ONLY 10 times during the entire transfer (10% increments)
+        // This removes unnecessary logging/UI updates that block the main thread and kill SCTP speed.
+        if (progress - this._lastProgress < 0.1 && progress < 1) return;
         this._lastProgress = progress;
+        this._onDownloadProgress(progress);
         this._sendProgress(progress);
     }
 
@@ -139,6 +153,7 @@ class Peer {
         this._onDownloadProgress(1);
         this._reader = null;
         this._busy = false;
+        clearInterval(this._transferPing);
         this._dequeueFile();
         Events.fire('notify-user', 'File transfer completed.');
     }
@@ -212,10 +227,10 @@ class RTCPeer extends Peer {
     }
 
     _openChannel() {
-        // Create ordered, reliable channel for file integrity
-        // maxRetransmits is not set → defaults to reliable (TCP-like)
+        // Disable Ordered Delivery: stops browser from pausing transfer to re-order packets.
+        // We handle the ordering manually using 8-byte offset headers and OPFS.
         const channel = this._conn.createDataChannel('aura-data-channel', {
-            ordered: true
+            ordered: false
         });
         channel.binaryType = 'arraybuffer';
 
@@ -358,7 +373,7 @@ class RTCPeer extends Peer {
     _send(message) {
         if (!this._channel) return this.refresh();
 
-        const BACKPRESSURE_THRESHOLD = 16 * 1024 * 1024; // 16 MB
+        const BACKPRESSURE_THRESHOLD = 32 * 1024 * 1024; // 32 MB
 
         if (this._channel.bufferedAmount > BACKPRESSURE_THRESHOLD) {
             // PAUSE: buffer is full, wait for drain
