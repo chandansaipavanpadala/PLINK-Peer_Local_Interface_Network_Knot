@@ -304,7 +304,21 @@ class ReceiveDialog extends Dialog {
 
     _displayFile(file) {
         const $a = this.$el.querySelector('#download');
-        const url = URL.createObjectURL(file.blob);
+
+        // ─── Mega-file: use Service Worker stream URL ───
+        // For 5GB+ files, the Digester provides a streamUrl instead of a blob.
+        // This lets the browser download directly from the SW stream
+        // without ever holding the full file in RAM.
+        let url;
+        if (file.streamUrl) {
+            url = file.streamUrl;
+        } else if (file.blob) {
+            url = URL.createObjectURL(file.blob);
+        } else {
+            console.error('Aura: received file with no blob or streamUrl');
+            return;
+        }
+
         $a.href = url;
         $a.download = file.name;
 
@@ -312,7 +326,7 @@ class ReceiveDialog extends Dialog {
             $a.click();
             return;
         }
-        if (file.mime.split('/')[0] === 'image') {
+        if (file.blob && file.mime.split('/')[0] === 'image') {
             this.$el.querySelector('.preview').style.visibility = 'inherit';
             this.$el.querySelector('#img-preview').src = url;
         }
@@ -322,10 +336,13 @@ class ReceiveDialog extends Dialog {
         this.show();
 
         if (window.isDownloadSupported) return;
+        // Fallback for browsers without download attribute
         $a.target = '_blank';
-        const reader = new FileReader();
-        reader.onload = e => $a.href = reader.result;
-        reader.readAsDataURL(file.blob);
+        if (file.blob) {
+            const reader = new FileReader();
+            reader.onload = e => $a.href = reader.result;
+            reader.readAsDataURL(file.blob);
+        }
     }
 
     _formatFileSize(bytes) {

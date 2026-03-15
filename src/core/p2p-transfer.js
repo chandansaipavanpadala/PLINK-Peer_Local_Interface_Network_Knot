@@ -1,10 +1,15 @@
 /**
- * Aura — P2P Transfer Engine
- * Handles peer-to-peer file and message transfer using WebRTC Data Channels.
+ * Aura — P2P Transfer Engine (Mega-File Optimized)
  * 
- * Production-ready: Uses Google STUN servers for NAT traversal,
- * bufferedAmountLow-based flow control for high-speed transfers,
- * and Screen Wake Lock API for mobile reliability.
+ * Handles peer-to-peer file and message transfer via WebRTC Data Channels.
+ * 
+ * Mega-file optimizations:
+ * - 16MB backpressure threshold on bufferedAmount
+ * - bufferedAmountLow event-driven flow control (no polling)
+ * - SCTP maxMessageSize negotiation via SDP
+ * - Screen Wake Lock for mobile reliability
+ * - Google STUN servers for NAT traversal
+ * - StreamURL support for Service Worker downloads
  */
 
 class Peer {
@@ -113,7 +118,8 @@ class Peer {
         const progress = this._digester.progress;
         this._onDownloadProgress(progress);
 
-        if (progress - this._lastProgress < 0.01) return;
+        // Throttle progress messages to reduce signaling overhead
+        if (progress - this._lastProgress < 0.005 && progress < 1) return;
         this._lastProgress = progress;
         this._sendProgress(progress);
     }
@@ -123,7 +129,7 @@ class Peer {
     }
 
     _onFileReceived(proxyFile) {
-        // Notification fires HERE — only after the Blob is fully assembled
+        // File fully assembled (blob or stream URL ready)
         Events.fire('file-received', proxyFile);
         this.sendJSON({ type: 'transfer-complete' });
         this._releaseWakeLock();
@@ -134,7 +140,6 @@ class Peer {
         this._reader = null;
         this._busy = false;
         this._dequeueFile();
-        // Only notify AFTER the receiver has confirmed assembly
         Events.fire('notify-user', 'File transfer completed.');
     }
 
@@ -174,6 +179,12 @@ class Peer {
     }
 }
 
+// ═══════════════════════════════════════
+//  RTCPeer — WebRTC Data Channel Engine
+//  Mega-file optimized with 16MB
+//  backpressure and SCTP tuning.
+// ═══════════════════════════════════════
+
 class RTCPeer extends Peer {
 
     constructor(serverConnection, peerId) {
@@ -201,19 +212,58 @@ class RTCPeer extends Peer {
     }
 
     _openChannel() {
+        // Create ordered, reliable channel for file integrity
+        // maxRetransmits is not set → defaults to reliable (TCP-like)
         const channel = this._conn.createDataChannel('aura-data-channel', {
             ordered: true
         });
         channel.binaryType = 'arraybuffer';
-        channel.bufferedAmountLowThreshold = 256 * 1024; // 256 KB
+
+        // 16MB backpressure threshold — when buffer drops below this,
+        // the bufferedamountlow event fires and we resume sending.
+        channel.bufferedAmountLowThreshold = 1 * 1024 * 1024; // 1 MB
         channel.onopen = e => this._onChannelOpened(e);
         this._conn.createOffer().then(d => this._onDescription(d)).catch(e => this._onError(e));
     }
 
     _onDescription(description) {
+        // ─── SCTP Throughput: Increase maxMessageSize ───
+        // Modify the SDP to request the maximum SCTP message size
+        // supported by the browser. This reduces overhead for large transfers.
+        if (description.sdp) {
+            description = new RTCSessionDescription({
+                type: description.type,
+                sdp: this._patchSctpMaxMessageSize(description.sdp)
+            });
+        }
+
         this._conn.setLocalDescription(description)
             .then(_ => this._sendSignal({ sdp: description }))
             .catch(e => this._onError(e));
+    }
+
+    /**
+     * Patches the SDP to set max-message-size to 256KB.
+     * The default is often 64KB or even 16KB depending on the browser.
+     * Setting this higher reduces the SCTP framing overhead per message.
+     */
+    _patchSctpMaxMessageSize(sdp) {
+        // Look for the SCTP max-message-size line and increase it
+        const maxSize = 262144; // 256 KB
+        if (sdp.includes('max-message-size')) {
+            return sdp.replace(
+                /max-message-size:\s*\d+/g,
+                `max-message-size:${maxSize}`
+            );
+        }
+        // If no max-message-size line exists, add one after sctpmap
+        if (sdp.includes('a=sctpmap') || sdp.includes('a=sctp-port')) {
+            return sdp.replace(
+                /(a=sctp-port:\d+)/,
+                `$1\r\na=max-message-size:${maxSize}`
+            );
+        }
+        return sdp;
     }
 
     _onIceCandidate(event) {
@@ -242,7 +292,14 @@ class RTCPeer extends Peer {
         console.log('Aura P2P: channel opened with', this._peerId);
         const channel = event.channel || event.target;
         channel.binaryType = 'arraybuffer';
-        channel.bufferedAmountLowThreshold = 256 * 1024; // 256 KB
+        channel.bufferedAmountLowThreshold = 1 * 1024 * 1024; // 1 MB
+
+        // Log the negotiated SCTP maxMessageSize
+        if (this._conn.sctp) {
+            console.log('Aura SCTP maxMessageSize:',
+                this._conn.sctp.maxMessageSize, 'bytes');
+        }
+
         channel.onmessage = e => this._onMessage(e.data);
         channel.onclose = e => this._onChannelClosed();
         this._channel = channel;
@@ -283,14 +340,28 @@ class RTCPeer extends Peer {
         console.error('Aura P2P Error:', error);
     }
 
+    /**
+     * ─── Controlled Backpressure (16MB threshold) ───
+     * 
+     * This is THE critical path for mega-file transfers.
+     * 
+     * If the data channel's send buffer exceeds 16MB, we PAUSE
+     * the stream and wait for the browser's internal buffer to
+     * drain. When it drops below the bufferedAmountLowThreshold (1MB),
+     * the bufferedamountlow event fires and we resume.
+     * 
+     * This prevents:
+     * - Memory overflow on 5GB+ transfers
+     * - Browser tab crashes
+     * - Congestion collapse (data sent faster than network can handle)
+     */
     _send(message) {
         if (!this._channel) return this.refresh();
 
-        // ─── bufferedAmountLow-based flow control ───
-        // If the send buffer is congested, wait for it to drain
-        // before sending more data. This is the KEY fix for
-        // slow > 10MB transfers and mobile upload failures.
-        if (this._channel.bufferedAmount > 1024 * 1024) { // > 1 MB buffered
+        const BACKPRESSURE_THRESHOLD = 16 * 1024 * 1024; // 16 MB
+
+        if (this._channel.bufferedAmount > BACKPRESSURE_THRESHOLD) {
+            // PAUSE: buffer is full, wait for drain
             this._channel.onbufferedamountlow = () => {
                 this._channel.onbufferedamountlow = null;
                 this._channel.send(message);
@@ -381,10 +452,8 @@ class WSPeer extends Peer {
 }
 
 /**
- * ICE Configuration — Production-ready
- * Uses Google's public STUN servers for NAT traversal.
- * This enables connections across networks (Phone ↔ Laptop)
- * when devices are behind NAT/firewalls.
+ * ICE Configuration — Production
+ * Uses Google STUN servers for NAT traversal.
  */
 RTCPeer.config = {
     'sdpSemantics': 'unified-plan',

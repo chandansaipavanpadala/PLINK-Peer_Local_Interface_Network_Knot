@@ -1,12 +1,16 @@
 /**
- * Aura — Service Worker
- * Implements offline-first caching strategy.
+ * Aura — Service Worker (Mega-File Optimized)
  * 
- * ZERO-CLOUD: Once loaded, Aura works with ZERO internet connection.
- * All assets are cached locally on first visit.
+ * Implements:
+ * 1. Offline-first caching strategy for PWA
+ * 2. Stream-to-disk downloads for 5GB+ received files
+ *    — Chunks are piped directly to a download response
+ *      without ever holding the full file in RAM.
+ *
+ * ZERO-CLOUD: Once loaded, Aura works with ZERO internet.
  */
 
-const CACHE_NAME = 'aura-cache-v2';
+const CACHE_NAME = 'aura-cache-v3';
 
 const ASSETS_TO_CACHE = [
     './',
@@ -30,10 +34,19 @@ const ASSETS_TO_CACHE = [
     'manifest.json'
 ];
 
+// ═══════════════════════════════════════
+//  Streaming Download Registry
+//  Holds active stream controllers keyed by streamId.
+//  The main thread pushes chunks via postMessage,
+//  and the fetch handler serves them as a streaming Response.
+// ═══════════════════════════════════════
+
+const activeStreams = new Map();
+
 // ─── Install: Cache all critical assets ───
 
 self.addEventListener('install', event => {
-    console.log('Aura SW: Installing...');
+    console.log('Aura SW: Installing v3 (streaming support)...');
     event.waitUntil(
         caches.open(CACHE_NAME)
             .then(cache => {
@@ -44,7 +57,7 @@ self.addEventListener('install', event => {
     );
 });
 
-// ─── Activate: Clean old caches ───
+// ─── Activate: Clean old caches, claim clients ───
 
 self.addEventListener('activate', event => {
     console.log('Aura SW: Activating...');
@@ -62,20 +75,105 @@ self.addEventListener('activate', event => {
     );
 });
 
-// ─── Fetch: Cache-first strategy ───
-// Serve from cache if available, fall back to network.
-// This ensures the app works completely offline.
+// ─── Messages from main thread (stream control) ───
+
+self.addEventListener('message', event => {
+    const data = event.data;
+    if (!data || !data.type) return;
+
+    switch (data.type) {
+        case 'stream-download': {
+            // Main thread is starting a large file receive
+            // Create a ReadableStream and store its controller
+            let controller;
+            const stream = new ReadableStream({
+                start(c) {
+                    controller = c;
+                }
+            });
+
+            activeStreams.set(data.streamId, {
+                stream: stream,
+                controller: controller,
+                filename: data.filename,
+                mime: data.mime || 'application/octet-stream',
+                size: data.size
+            });
+
+            // Reply that we're ready
+            if (event.ports[0]) {
+                event.ports[0].postMessage({ type: 'stream-ready' });
+            }
+
+            console.log('Aura SW: Stream registered:', data.streamId, data.filename);
+            break;
+        }
+
+        case 'stream-chunk': {
+            // Main thread is pushing a chunk of received data
+            const entry = activeStreams.get(data.streamId);
+            if (entry && entry.controller) {
+                entry.controller.enqueue(new Uint8Array(data.chunk));
+            }
+            break;
+        }
+
+        case 'stream-end': {
+            // Main thread says the file is fully received
+            const entry = activeStreams.get(data.streamId);
+            if (entry && entry.controller) {
+                entry.controller.close();
+                console.log('Aura SW: Stream completed:', data.streamId);
+            }
+            // Don't delete from map yet — the fetch handler still needs it
+            // It will be cleaned up after the Response is consumed
+            break;
+        }
+    }
+});
+
+// ─── Fetch: Cache-first + Stream downloads ───
 
 self.addEventListener('fetch', event => {
-    // Skip WebSocket requests
-    if (event.request.url.includes('/server/')) return;
+    const url = new URL(event.request.url);
 
+    // ═══ Stream download handler ═══
+    // Intercepts requests to /aura-stream-download/{streamId}
+    // and returns a streaming Response piped from the registered ReadableStream
+    if (url.pathname.startsWith('/aura-stream-download/')) {
+        const streamId = url.pathname.split('/').pop();
+        const entry = activeStreams.get(streamId);
+
+        if (entry) {
+            const headers = new Headers({
+                'Content-Type': entry.mime,
+                'Content-Disposition': `attachment; filename="${encodeURIComponent(entry.filename)}"`,
+                'Content-Length': entry.size
+            });
+
+            const response = new Response(entry.stream, { headers });
+
+            // Clean up the registry after some time
+            // (give the browser time to start consuming the stream)
+            setTimeout(() => activeStreams.delete(streamId), 60000);
+
+            event.respondWith(response);
+            return;
+        }
+    }
+
+    // ═══ Skip WebSocket / signaling requests ═══
+    if (url.pathname.includes('/server/') || url.protocol === 'ws:' || url.protocol === 'wss:') {
+        return;
+    }
+
+    // ═══ Cache-first strategy for app assets ═══
     event.respondWith(
         caches.match(event.request)
             .then(cached => {
                 if (cached) {
-                    // Return cached version, but also update cache in background
-                    const fetchPromise = fetch(event.request)
+                    // Return cached, update in background
+                    fetch(event.request)
                         .then(networkResponse => {
                             if (networkResponse && networkResponse.status === 200) {
                                 const responseClone = networkResponse.clone();
@@ -83,9 +181,8 @@ self.addEventListener('fetch', event => {
                                     cache.put(event.request, responseClone);
                                 });
                             }
-                            return networkResponse;
                         })
-                        .catch(() => cached);
+                        .catch(() => {});
 
                     return cached;
                 }
