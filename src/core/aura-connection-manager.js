@@ -27,6 +27,7 @@ class AuraConnectionManager {
         ws.onopen = e => {
             console.log('Aura: signaling server connected');
             Events.fire('ws-connected');
+            this._startHeartbeat();
         };
         ws.onmessage = e => this._onMessage(e.data);
         ws.onclose = e => this._onDisconnect();
@@ -72,6 +73,7 @@ class AuraConnectionManager {
     }
 
     _disconnect() {
+        this._stopHeartbeat();
         this.send({ type: 'disconnect' });
         if (this._socket) {
             this._socket.onclose = null;
@@ -79,8 +81,22 @@ class AuraConnectionManager {
         }
     }
 
+    _startHeartbeat() {
+        clearInterval(this._heartbeat);
+        this._heartbeat = setInterval(() => {
+            if (this._isConnected()) {
+                this.send({ type: 'ping' });
+            }
+        }, 3000);
+    }
+
+    _stopHeartbeat() {
+        clearInterval(this._heartbeat);
+    }
+
     _onDisconnect() {
         console.log('Aura: signaling server disconnected');
+        this._stopHeartbeat();
         Events.fire('notify-user', 'Connection lost. Retrying in 5s...');
         Events.fire('ws-disconnected');
         clearTimeout(this._reconnectTimer);

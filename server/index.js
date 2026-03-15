@@ -116,6 +116,7 @@ class AuraServer {
                 this._leaveRoom(sender);
                 break;
             case 'pong':
+            case 'ping':
                 sender.lastBeat = Date.now();
                 break;
         }

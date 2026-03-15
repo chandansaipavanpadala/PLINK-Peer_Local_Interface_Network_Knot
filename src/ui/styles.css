@@ -874,6 +874,22 @@ x-peers:empty ~ x-instructions {
     color: var(--cyan);
 }
 
+.github-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px;
+    border-radius: var(--r-full);
+}
+
+.github-link svg {
+    transition: filter var(--t-fast);
+}
+
+.github-link:hover svg {
+    filter: drop-shadow(0 0 8px var(--cyan-dim));
+}
+
 
 /* ═══════════════════════════════════════
    OFFLINE FALLBACK
@@ -1148,8 +1164,9 @@ x-toast {
     font-weight: 500;
 }
 
-x-toast:not([show]):not(:hover) {
+x-toast:not([show]) {
     opacity: 0;
+    pointer-events: none;
     transform: translateY(-60px);
 }
 
@@ -1196,20 +1213,41 @@ x-toast:not([show]):not(:hover) {
 
 #about x-background {
     position: absolute;
-    top: calc(32px - 200px);
-    right: calc(32px - 200px);
-    width: 400px;
-    height: 400px;
-    border-radius: var(--r-full);
-    background: linear-gradient(135deg, var(--bg-secondary), var(--bg-elevated));
-    transform: scale(0);
+    width: 100%;
+    height: 100%;
+    background: var(--bg-primary);
     z-index: -1;
-    will-change: transform;
-    transition: transform 900ms cubic-bezier(0.77, 0, 0.175, 1);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 300ms;
 }
 
 #about:target x-background {
-    transform: scale(14);
+    opacity: 1;
+}
+
+#about:target::before,
+#about:target::after {
+    content: '';
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 120px; height: 120px;
+    border: 1px solid var(--cyan);
+    border-radius: 50%;
+    transform: translate(-50%, -50%) scale(0.1);
+    opacity: 0;
+    z-index: -1;
+    animation: data-pulse 3s cubic-bezier(0.1, 0.8, 0.3, 1) infinite;
+    pointer-events: none;
+}
+
+#about:target::after {
+    animation-delay: 1.5s;
+}
+
+@keyframes data-pulse {
+    0% { transform: translate(-50%, -50%) scale(0.8); opacity: 0.8; }
+    100% { transform: translate(-50%, -50%) scale(4); opacity: 0; }
 }
 
 #about .row a {
